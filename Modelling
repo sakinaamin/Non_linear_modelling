@@ -1,0 +1,339 @@
+library(splines)
+library(faraway)
+library(ggplot2)
+library(dplyr)
+data(uswages)
+ggplot(uswages, aes(exper, wage))+geom_point(col = "slategrey")+
+  labs(x = "Experience in year", y = "Weekly wage")+
+  ggtitle("Relationship between weekly wages and years of experience")
+
+
+mat_filtered <- read.delim("~/OneDrive - Nexus365/DPhil Project/Ageing/immunerd/Data/isotyper_metrics_filtered_FINAL_METRICS_8000_ALL.txt")
+metadata <- read.csv("~/OneDrive - Nexus365/DPhil Project/Ageing/immunerd/Data/Phenodata_boxes.xlsx - Phenodata_boxes (1).csv")
+
+data <- mat_filtered_final
+kable(data, caption = "Variable description")
+ggplot(data, aes(AGE, TRBC_ALL_Mean_CDR3_Lengths))+geom_point(col = "slategrey")+
+  labs(x = "CDR3 length", y = "Age")+
+  ggtitle("Relationship between Age and TCR CDR3 length")
+
+#Null hypothesis - There is no change in CDR3 length with age 25th Jan
+
+#remove outliers - to avoid influence on regression
+data <- filter(data, TRBC_ALL_Mean_CDR3_Lengths<15.4)
+data$AGE <- as.numeric(data$AGE)
+#1. OLS 
+fit1 = lm(TRBC_ALL_Mean_CDR3_Lengths ~ AGE, data = data)
+plot(data$AGE, data$TRBC_ALL_Mean_CDR3_Lengths, xlab = "Age", 
+     ylab = "CDR3 length", main = "OLS model", col = "slategrey")
+abline(fit1, col = "red")
+
+#2. Polynomial regression
+g2 = lm(TRBC_ALL_Mean_CDR3_Lengths~poly(AGE, 2), data = data)
+g3 = lm(TRBC_ALL_Mean_CDR3_Lengths~poly(AGE, 3), data = data)
+g4 = lm(TRBC_ALL_Mean_CDR3_Lengths~poly(AGE, 4), data = data)
+data = mutate(data, degree2 = fitted(g2), degree4 = fitted(g4), degree3 = fitted(g3))
+ggplot(data, aes(AGE, TRBC_ALL_Mean_CDR3_Lengths)) +
+  labs(x = "AGE", y = "CDR3 length")+
+  geom_point( col = "slategrey") + 
+  geom_line(aes(AGE, degree2,color = "2"))+
+  geom_line(aes(AGE, degree4,color = "4")) +
+  geom_line(aes(AGE, degree3,color = "3")) +
+  scale_color_manual(values = c(
+    '2' = 'darkblue',
+    '4' = 'red',
+    '3' = 'brown')) +
+  labs(color = 'Polynomial degree')+
+  ggtitle("Polynomial regression models")
+
+#3. cubic regression spline
+quantiles <- quantile(data$TRBC_ALL_Mean_CDR3_Lengths, probs = c(0.25, 0.5, 0.75))
+
+cubic_spline = lm(TRBC_ALL_Mean_CDR3_Lengths~bs(AGE, knots = c(14.52,14.61,14.69)), data = data)
+data = mutate(data, smooth = fitted(cubic_spline))
+ggplot(data, aes(AGE, TRBC_ALL_Mean_CDR3_Lengths)) + 
+  labs(x = "AGE", y = "CDR3 length")+
+  geom_point(col = "slategrey") +
+  geom_line(aes(AGE, smooth), col = "red") + 
+  ggtitle("Cubic regression spline model")
+
+summary(cubic_spline)
+
+
+#MCA for categorical data (>100 categories)- all
+meta <- meta %>% mutate(age_group = as.numeric(as.character(AGE..at.the.blood.drawing.)),
+                                                    age_group = case_when(
+                                                      between(age_group, 20, 40.9) ~ "20-40",
+                                                      between(age_group, 41, 60.9) ~ "40-60",
+                                                      between(age_group, 61, 80.9) ~ "60-80",
+                                                      age_group >= 81 ~ "80+",
+                                                      TRUE ~ NA_character_))
+
+meta <- read.csv("~/OneDrive - Nexus365/DPhil Project/Ageing/immunerd/Data/DbDescription5_V2 + dati.xlsx - Dati.csv")
+frequency_tables <- lapply(meta, freq)
+
+require(FactoMineR)
+df <- meta[,-c(1,2,4,5)]
+cats = apply(meta, 2, function(x) nlevels(as.factor(x))) #number of categories per variable
+mca_trial = MCA(df, graph = T)
+mca1 = MCA(meta, graph = FALSE)
+
+mca1_vars_df = data.frame(mca1$var$coord, Variable = rep(names(cats), 
+                                                         cats))
+mca1_obs_df = data.frame(mca1$ind$coord)
+
+# plot of variable categories
+ggplot(data = mca1_obs_df, aes(x = Dim.1, y = Dim.2)) + geom_hline(yintercept = 0, 
+   colour = "gray70") + geom_vline(xintercept = 0, colour = "gray70") + geom_point(colour = "gray50", 
+   aes(x = Dim.1, y = Dim.2, label = rownames(mca1_vars_df), colour = Variable)) + 
+  ggtitle("MCA plot of variables") + scale_colour_discrete(name = "Variable")
+
+
+#filtering the data 27 Jan 
+# b = apply(meta, 2, function(x){length(unique(x))})
+a = apply(meta, 2, function(x){min(table(x))})
+b = apply(meta, 2, function(x){length(unique(x[which(is.na(x)==F)]))})
+hist(b)
+a[which(b<=2)]
+which(b<=2)
+
+#0 for Yes, 1 for NO, 2 for dont know
+meta$GI_disorders = apply(meta[, c("DISEASESCHECKLIST_3.ULCER", "CROHN","COLITIS", "DISEASES_3.ULCER", "PANCREATITIS")], 1, function(row) {
+  if (any(row == 0, na.rm = TRUE)) {
+    return(0)
+  } else if (all(row == 2, na.rm = TRUE)) {
+    return(2)
+  } else {
+    return(1)
+  }
+})
+meta$skin_disorder = apply(meta[, c("ECZEMA", "PSORIASIS", "VITILIGO")], 1, function(row) {
+  if (any(row == 0, na.rm = TRUE)) {
+    return(0)
+  } else if (all(row == 2, na.rm = TRUE)) {
+    return(2)
+  } else {
+    return(1)
+  }
+})
+meta$immune_disorder = apply(meta[, c("VASCULITIS", "BEHCET", "SJOGREN", "ANKYLOSING", "OSTEOARTHRITIS", "RHEUMATICFEVER", "UVEITIS")], 1, function(row) {
+  if (any(row == 0, na.rm = TRUE)) {
+    return(0)
+  } else if (all(row == 2, na.rm = TRUE)) {
+    return(2)
+  } else {
+    return(1)
+  }
+})
+meta$respiratory_disorder = apply(meta[, c("ASTHMA","EMPHYSEMA","BRONCHITIS","FIBROSIS")], 1, function(row) {
+  if (any(row == 0, na.rm = TRUE)) {
+    return(0)
+  } else if (all(row == 2, na.rm = TRUE)) {
+    return(2)
+  } else {
+    return(1)
+  }
+})
+meta$urinary_disorder = apply(meta[, c("DIALISIS", "GLOMERULOPATHIES", "GOODPASTURES")], 1, function(row) {
+  if (any(row == 0, na.rm = TRUE)) {
+    return(0)
+  } else if (all(row == 2, na.rm = TRUE)) {
+    return(2)
+  } else {
+    return(1)
+  }
+})
+meta$neuro_disorder = apply(meta[, c("ALZHEIMER", "PARKINSON", "M_SCLEROSIS","EPILEPSY_1","EPILEPSY_2",
+                                     "EPILEPSY_3","MYASTHENIA","DYSTROPHY","DEMENTIAS")], 1, function(row) {
+  if (any(row == 0, na.rm = TRUE)) {
+    return(0)
+  } else if (all(row == 2, na.rm = TRUE)) {
+    return(2)
+  } else {
+    return(1)
+  }
+}) #neurological and neuromuscular disorder
+meta$endocrine_disorder = apply(meta[, c("ACROMEGALY", "HASHIMOTO", "HYPOTHYROIDISM","HYPERTHYROIDISM")], 1, function(row) {
+  if (any(row == 0, na.rm = TRUE)) {
+    return(0)
+  } else if (all(row == 2, na.rm = TRUE)) {
+    return(2)
+  } else {
+    return(1)
+  }
+})
+
+#broad metadata
+broad_meta <- meta %>% select(c("INDIVIDUAL", "SEX", "AGE..at.the.blood.drawing.", "EO.", "DIABETES","CANCER","GASTROINTESTINALCHECK",
+                                "HEMATOLOGICALCHECK","DISORDERSCHECK","IMMUNOLOGICALCHECK","BMI","PREGNANCIES","MENOPAUSE",
+                                "CONTRACEPTIVE_1","Anti_inflamatory_analgesic_FANS_etc","vigorous_act","moderate_act","walk","sport",
+                                "PrELA","Antibiotics_antiviralt_antimicotic","modulating_immune_system","Hormones","ALCOHOLIC","respiratory_disorder",
+                                "urinary_disorder","neuro_disorder","endocrine_disorder"))
+
+broad_meta <- broad_meta %>% mutate(across(matches("CHECK"), ~ if_else(. == 0, "No", if_else(. == 1, "Yes", ""))))
+broad_meta <- broad_meta %>% mutate(across(matches("CHECK"), ~ if_else(. == "No", "1", if_else(. == "Yes", "0", ""))))
+write.table(broad_meta, file = "~/Library/CloudStorage/OneDrive-Nexus365/DPhil Project/Ageing/immunerd/Data/Sardinia_metadata_clean.txt", append = FALSE, quote = FALSE, sep = "\t",eol = "\n", na = "NA", dec = ".", row.names = T,col.names = T, qmethod = c("escape", "double"),fileEncoding = "")
+
+#now all 0/1s are aligned. Check NA values per column
+#99 values missing for most 
+apply(meta, 2, function(x) sum(is.na(x))) #how many NA values per column
+na_percentages <- apply(meta, 2, function(x) sum(is.na(x)) / length(x))
+columns_with_high_na <- names(na_percentages[na_percentages > 0.15])
+filtered_meta <- meta[, !names(meta) %in% columns_with_high_na]
+
+#to explore female health - filtering has to be done only based on sex as F (pre/post menopause as groups)
+fem_meta <- broad_meta %>% filter(SEX == "F")
+na_percentages_fem <- apply(fem_meta, 2, function(x) sum(is.na(x)) / length(x))
+columns_with_high_na_fem <- names(na_percentages_fem[na_percentages_fem > 0.20])
+# [1] "MENOPAUSE"       "CONTRACEPTIVE_1" "sport"           "PrELA"
+filtfem_meta <- fem_meta[, !names(fem_meta) %in% columns_with_high_na_fem]
+
+###Partial residual 
+library(car)
+d_new <- d %>% filter(age_group == "60-80")
+age <- d$AGE
+d1 <- d$Module_6
+can <- d$PrELA
+model <- lm(age~d1)
+# summary(model)
+crPlots(model)
+
+pdf("MLR_BCR_with_age.pdf")
+plots <- list()
+for (col_name in names(d)) {
+  if (is.numeric(d[[col_name]])) {
+    d1 <- d[[col_name]]
+    model <- lm(age ~ d1)
+    if (!is.null(model$coefficients)) {
+      p <- car::crPlots(model)
+      plots[[col_name]] <- p
+    } else {
+      print(paste("Invalid model for variable:", col_name))
+    }
+  }
+}
+dev.off()
+
+#mixed effects linear regression
+lmm_model <- lmer(Module_6 ~ AGE + (1|age_group), data = d)
+
+
+###natural cubic spline model - Nature manuscript 29 Jan
+completed <- d #module scores
+completed <- completed[complete.cases(completed$Module_6),]
+
+completed <- mat_filtered_final #raw metrics
+completed <- completed[complete.cases(completed$BCR_PRODUCTIVE_Mean_CDR3_Lengths__IGHM),]
+completed$AGE<- as.numeric(completed$AGE)
+
+completed <- newmat_filtered_final #scaled metrics
+completed <- completed[complete.cases(completed$Module_6),]
+completed$AGE<- as.numeric(completed$AGE)
+
+knots <- quantile(completed$AGE, probs = c(0.25, 0.50, 0.75))
+# completed$AGE<- as.numeric(completed$AGE)
+#remove outlier
+Q1 <- quantile(completed$Module_6, 0.25)
+Q3 <- quantile(completed$Module_6, 0.75)
+IQR <- Q3 - Q1
+lower_limit <- Q1 - 1.5 * IQR
+upper_limit <- Q3 + 1.5 * IQR
+completed <- completed %>%
+  filter(Module_6 >= lower_limit,
+         Module_6 <= upper_limit)
+
+plot(data$BCR_PRODUCTIVE_Mean_CDR3_Lengths__IGHM~data$AGE)
+
+spline_model <- lm(completed$BCR_PRODUCTIVE_Mean_CDR3_Lengths__IGHM ~ ns(completed$AGE, knots = knots), data = completed)
+age_seq <- seq(min(completed$AGE), max(completed$AGE), length.out = 844)
+predictions <- predict(spline_model, newdata = data.frame(age = age_seq), se = TRUE)
+plot(completed$AGE, completed$BCR_PRODUCTIVE_Mean_CDR3_Lengths__IGHM, pch = 16, col = "blue", xlab = "Age", ylab = "D5", main = "Natural Cubic Spline Model")
+
+lines(age_seq, predictions$fit, col = "red", lwd = 2)  # Fitted curve
+lines(age_seq, predictions$fit + 2 * predictions$se.fit, col = "gray", lty = 2)  # Upper confidence interval
+lines(age_seq, predictions$fit - 2 * predictions$se.fit, col = "gray", lty = 2)  # Lower confidence interval
+legend("topright", legend = c("Observed Data", "Fitted Curve", "95% CI"), col = c("blue", "red", "gray"), lty = c(NA, 1, 2))
+
+
+# variable_to_normalize <- completed$BCR_PRODUCTIVE_m_max_clust_size_Subsampled__all
+# mean_value <- mean(variable_to_normalize)
+# std_dev <- sd(variable_to_normalize)
+# z_normalized_variable <- (variable_to_normalize - mean_value) / std_dev
+# completed$z_norm_BCR_PRODUCTIVE_m_max_clust_size_Subsampled__all <- z_normalized_variable
+
+
+#sanity check to ensure our metrics are correct
+mat_filtered_final
+data <- mat_filtered_final
+colnames(data)
+
+data <- data[complete.cases(data$BCR_PRODUCTIVE_Mean_CDR3_Lengths__IGHD),]
+data$age_group <- as.numeric(data$age) #4 categories 
+b <- boxplot(data$BCR_PRODUCTIVE_Percentage_Unmutated__Class_switched~data$age_group)
+t.test(b)
+
+data <- data %>% mutate(across(matches("CHECK"), ~ if_else(. == "1", "No", if_else(. == "0", "Yes", ""))))
+
+
+library(ggpubr)
+
+pdf("all_features_across_age.pdf")
+for (i in colnames(data)) {
+  p <- ggboxplot(data, x = "age_group", y = i, color = "age_group", palette = "jco", add = "jitter") +
+    stat_compare_means(method = "anova")
+  print(p)
+}
+dev.off()
+p <- ggboxplot(data, x = "age_group", y = "BCR_PRODUCTIVE_Mean_SHM_per_VDJ__IGHM", color = "age_group", palette = "jco",add = "jitter")
+p + stat_compare_means(method="anova")
+data$age_group <- factor(data$age_group,levels = c("20-40", "40-60", "60-80", "80+"))
+
+
+##smoothing spline 30 Jan
+#with metrics data raw 
+mod.ss <- ss( data$AGE,data$BCR_PRODUCTIVE_Mean_CDR3_Lengths__IGHM, nknots = 5)
+plot(mod.ss, col = "blue", xlab = "age", ylab = "CDR3 length IGHM")
+summary(mod.ss)
+
+#with module score data
+mod.ss <- ss( completed$AGE,completed$Module_12, nknots = 5)
+plot(mod.ss, col = "red", xlab = "age", ylab = "Module score")
+summary(mod.ss)
+
+#plot across all modules
+pdf("Module_scores_with_age.pdf")
+for (i in colnames(completed)[grep("Module", colnames(completed))]) {
+  mod.ss <- smooth.spline(completed$AGE, completed[[i]], nknots = 5)
+  plot(completed$AGE, completed[[i]], col = "red", xlab = "age", ylab = "Module score")
+  lines(mod.ss, col = "blue")
+}
+dev.off()
+
+#add covariates 
+library(splines)
+library(ggplot2)   #for the plots
+set.seed(1974)     #fix the random generator seed 
+
+#smooth spline with automatic number of knots chosen
+#and penalisation chosen by leave-one-out CV (this is the
+#option cv=T, otherwise generalized’ cross-validation is used)
+sspline <- smooth.spline(completed$AGE, 
+                         completed$Module_12, 
+                         cv=TRUE) 
+plot(completed$AGE,completed$Module_12)
+lines(sspline, col="blue")
+predict(sspline, x=c(20,90)) # predicted value for the ages of 20 and 90
+
+
+sspline <- smooth.spline(completed$AGE, 
+                         completed$Module_12, 
+                         lambda = 0.001) 
+plot(completed$AGE,completed$Module_12)
+lines(sspline, col="blue")
+
+
+
+
+
+
+
